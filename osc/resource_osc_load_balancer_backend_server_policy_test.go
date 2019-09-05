@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/elb"
 
-	tlsprovider "github.com/hashicorp/terraform/builtin/providers/tls"
+	tlsprovider "github.com/terraform-providers/terraform-provider-tls"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
 )
