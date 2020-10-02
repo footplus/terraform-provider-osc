@@ -95,6 +95,13 @@ func resourceAwsElb() *schema.Resource {
 				Set:      schema.HashString,
 			},
 
+			"idle_timeout": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				Default:      60,
+				ValidateFunc: validateIdleTimeoutInterval,
+			},
+
 			"access_logs": &schema.Schema{
 				Type:     schema.TypeList,
 				Optional: true,
@@ -372,6 +379,9 @@ func resourceAwsElbRead(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 	d.Set("subnets", flattenStringList(lb.Subnets))
+	if lbAttrs.ConnectionSettings != nil {
+		d.Set("idle_timeout", lbAttrs.ConnectionSettings.IdleTimeout)
+	}
 	//d.Set("idle_timeout", lbAttrs.ConnectionSettings.IdleTimeout)
 	//d.Set("connection_draining", lbAttrs.ConnectionDraining.Enabled)
 	//d.Set("connection_draining_timeout", lbAttrs.ConnectionDraining.Timeout)
@@ -523,34 +533,36 @@ func resourceAwsElbUpdate(d *schema.ResourceData, meta interface{}) error {
 		d.SetPartial("instances")
 	}
 
-	if d.HasChange("access_logs") {
+	if d.HasChange("idle_timeout") || d.HasChange("access_logs") {
+		attrs := elb.ModifyLoadBalancerAttributesInput{
+			LoadBalancerName: aws.String(d.Get("name").(string)),
+			LoadBalancerAttributes: &elb.LoadBalancerAttributes{
+				ConnectionSettings: &elb.ConnectionSettings{
+					IdleTimeout: aws.Int64(int64(d.Get("idle_timeout").(int))),
+				},
+			},
+		}
+
 		logs := d.Get("access_logs").([]interface{})
 		if len(logs) == 1 {
-			attrs := elb.ModifyLoadBalancerAttributesInput{
-				LoadBalancerName: aws.String(d.Get("name").(string)),
-			}
 			l := logs[0].(map[string]interface{})
-			accessLog := &elb.AccessLog{
-				Enabled:      aws.Bool(l["enabled"].(bool)),
-				EmitInterval: aws.Int64(int64(l["interval"].(int))),
-				S3BucketName: aws.String(l["bucket"].(string)),
-			}
-
-			if l["bucket_prefix"] != "" {
-				accessLog.S3BucketPrefix = aws.String(l["bucket_prefix"].(string))
-			}
-
-			attrs.LoadBalancerAttributes.AccessLog = accessLog
-			log.Printf("[DEBUG] ELB Modify Load Balancer Attributes Request: %#v", attrs)
-			_, err := elbconn.ModifyLoadBalancerAttributes(&attrs)
-			if err != nil {
-				return fmt.Errorf("Failure configuring ELB attributes: %s", err)
+			attrs.LoadBalancerAttributes.AccessLog = &elb.AccessLog{
+				Enabled:        aws.Bool(l["enabled"].(bool)),
+				EmitInterval:   aws.Int64(int64(l["interval"].(int))),
+				S3BucketName:   aws.String(l["bucket"].(string)),
+				S3BucketPrefix: aws.String(l["bucket_prefix"].(string)),
 			}
 		} else if len(logs) == 0 {
 			// disable access logs
-			//attrs.LoadBalancerAttributes.AccessLog = &elb.AccessLog{
-			//	Enabled: aws.Bool(false),
-			//}
+			attrs.LoadBalancerAttributes.AccessLog = &elb.AccessLog{
+				Enabled: aws.Bool(false),
+			}
+		}
+
+		log.Printf("[DEBUG] ELB Modify Load Balancer Attributes Request: %#v", attrs)
+		_, err := elbconn.ModifyLoadBalancerAttributes(&attrs)
+		if err != nil {
+			return fmt.Errorf("Failure configuring ELB attributes: %s", err)
 		}
 	}
 
@@ -785,6 +797,19 @@ func validateAccessLogsInterval(v interface{}, k string) (ws []string, errors []
 		errors = append(errors, fmt.Errorf(
 			"%q contains an invalid Access Logs interval \"%d\". "+
 				"Valid intervals are either 5 or 60 (minutes).",
+			k, value))
+	}
+	return
+}
+
+func validateIdleTimeoutInterval(v interface{}, k string) (ws []string, errors []error) {
+	value := v.(int)
+
+	// Check if the value is between 1 and 3600s.
+	if value < 1 || value > 3600 {
+		errors = append(errors, fmt.Errorf(
+			"%q contains an invalid Idle Timeout interval \"%d\". "+
+				"Valid intervals are between 1 and 3600 (seconds).",
 			k, value))
 	}
 	return
